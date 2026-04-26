@@ -1,0 +1,71 @@
+name: FDA Low-Float Daily Scan
+
+on:
+  schedule:
+    # 19:50 UTC = 15:50 EDT (Mar–Nov, UTC-4)
+    - cron: '50 19 * * *'
+    # 20:50 UTC = 15:50 EST (Nov–Mar, UTC-5)
+    - cron: '50 20 * * *'
+  workflow_dispatch:   # manual trigger for testing
+
+permissions:
+  contents: write      # required to push CSV output back to the repo
+
+jobs:
+  fda-scan:
+    runs-on: ubuntu-latest
+
+    # Prevent duplicate runs when both crons overlap during DST transition weeks
+    concurrency:
+      group: fda-scan-${{ github.ref }}-${{ github.run_id }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          # Use the default GITHUB_TOKEN — it already has contents:write via the
+          # permissions block above.  No PAT needed for same-repo pushes.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system dependencies (Chrome for Selenium fallback)
+        run: |
+          sudo apt-get update -q
+          # google-chrome-stable is pre-configured in ubuntu-latest runners
+          sudo apt-get install -y -q google-chrome-stable
+          google-chrome --version
+
+      - name: Install Python dependencies
+        run: pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run FDA scanner
+        env:
+          GITHUB_REPO_PATH: ${{ github.workspace }}
+          # Tell the script to skip its internal git push — the next step handles it
+          SKIP_GIT_PUSH: 'true'
+        run: python fda_scanner.py
+
+      - name: Commit and push results
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add fda_calendar/
+          # Exit gracefully if there is nothing new to commit
+          git diff --staged --quiet && echo "Nothing new to commit." && exit 0
+          git commit -m "FDA low-float scan $(TZ=America/New_York date '+%Y-%m-%d %H:%M') ET [skip ci]"
+          git push
+
+      - name: Upload CSV as workflow artifact (30-day retention)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fda-lowfloat-${{ github.run_id }}
+          path: fda_calendar/
+          retention-days: 30
