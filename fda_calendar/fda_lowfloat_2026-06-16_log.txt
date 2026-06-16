@@ -1,12 +1,12 @@
 FDA Low-Float Scanner — Summary Log
 ============================================================
-Run timestamp (ET): 2026-06-16 18:03:15 EDT
+Run timestamp (ET): 2026-06-16 18:36:55 EDT
 
 Total FDA events scraped:        0
 Events after date + float filter: 0
 
 Scraping / pipeline errors (1):
   - No events extracted from any scraping method
-2026-06-16 22:08:54,776 [INFO] Summary log written → /home/runner/work/biopharmacatalyst/biopharmacatalyst/fda_calendar/fda_lowfloat_2026-06-16_log.txt
-2026-06-16 22:08:54,776 [INFO] SKIP_GIT_PUSH set — skipping local git push (handled by CI)
-2026-06-16 22:08:54,776 [INFO] === Scan complete ===
+2026-06-16 22:42:29,556 [INFO] Summary log written → /home/runner/work/biopharmacatalyst/biopharmacatalyst/fda_calendar/fda_lowfloat_2026-06-16_log.txt
+2026-06-16 22:42:29,557 [INFO] SKIP_GIT_PUSH set — skipping local git push (handled by CI)
+2026-06-16 22:42:29,557 [INFO] === Scan complete ===
