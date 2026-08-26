@@ -210,3 +210,54 @@ def probe_industry_token(token: str, session: requests.Session) -> bool:
     """
     html = _fetch_page(VIEWS["overview"], PROBE_FILTERS + [token], 1, session)
     return bool(html and parse_screener_table(html))
+
+
+def probe(session: requests.Session) -> tuple[bool, str, dict]:
+    """Full health check of the Finviz stage without running the screen.
+
+    Verifies three separate things, because v1 proved they fail independently:
+      1. the screener responds and its result table parses
+      2. tickers come back as clean symbols (v1 doubled the first character)
+      3. the short-float column is actually present under one of its aliases
+         (v1's defining filter was silently empty on every row)
+    """
+    metrics: dict = {}
+    problems: list[str] = []
+
+    # Industry tokens.
+    bad_tokens = [name for name, token in INDUSTRIES.items()
+                  if not probe_industry_token(token, session)]
+    metrics["industries_ok"] = f"{len(INDUSTRIES) - len(bad_tokens)}/{len(INDUSTRIES)}"
+    if bad_tokens:
+        problems.append("invalid industry token(s): " + ", ".join(bad_tokens))
+
+    # Ownership view: does short float parse?
+    filters = BASE_FILTERS + [INDUSTRIES["Biotechnology"]]
+    html = _fetch_page(VIEWS["ownership"], filters, 1, session)
+    rows = parse_screener_table(html) if html else []
+    metrics["ownership_rows"] = len(rows)
+    if not rows:
+        problems.append("ownership view returned no parseable rows")
+    else:
+        with_sf = sum(1 for r in rows if resolve(r, "short_float") is not None)
+        metrics["short_float_rows"] = f"{with_sf}/{len(rows)}"
+        if with_sf == 0:
+            header = sorted(k for k in rows[0] if not k.startswith("_"))
+            problems.append(
+                "short float absent under every known alias "
+                f"{FIELD_ALIASES['short_float']}; headers seen: {header}")
+
+    # Overview view: do tickers look sane?
+    html_ov = _fetch_page(VIEWS["overview"], filters, 1, session)
+    rows_ov = parse_screener_table(html_ov) if html_ov else []
+    metrics["overview_rows"] = len(rows_ov)
+    if rows_ov:
+        sample = [r["_ticker"] for r in rows_ov[:5]]
+        metrics["sample_tickers"] = ",".join(sample)
+        doubled = [t for t in sample if len(t) > 2 and t[0] == t[1]]
+        if len(doubled) == len(sample):
+            problems.append(f"every sampled ticker looks doubled: {sample}")
+    else:
+        problems.append("overview view returned no parseable rows")
+
+    return (not problems), ("; ".join(problems) or "probe OK"), metrics

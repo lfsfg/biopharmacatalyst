@@ -387,12 +387,31 @@ def main() -> None:
         sys.exit(1)
 
     if args.dry_run:
+        log.info("Dry run: probing all four sources, writing nothing but health.")
+        for name, fn in (("finviz", finviz.probe), ("pdufa.bio", pdufa.probe)):
+            ok, detail, metrics = fn(session)
+            health.record(name, status=Status.OK if ok else Status.FAILED,
+                          required=(name == "finviz"), detail=detail, **metrics)
         for name, fn in (("edgar:fts", edgar.probe),
                          ("clinicaltrials.gov", ctgov.probe)):
             ok, detail = fn(session)
             health.record(name, status=Status.OK if ok else Status.FAILED,
                           required=True, detail=detail)
-        print(health.summary())
+
+        summary = health.summary()
+        print(summary)
+        # Write a manifest so the workflow's health-summary step has something
+        # to publish, and so a dry run leaves an artifact like any other run.
+        write_manifest(
+            out_dir / f"catalyst_manifest_{run_date}.json",
+            run_date=run_date, target_label=label,
+            target_start=target.start.isoformat(),
+            target_end=target.end.isoformat(),
+            universe=0, survivors=0, researched=0,
+            status="DRY_RUN_FAILED" if health.should_abort() else "DRY_RUN_OK",
+            health=health.all, diff_summary={}, rank_by=args.rank_by)
+        (out_dir / f"catalyst_probe_{run_date}.txt").write_text(
+            summary + "\n", encoding="utf-8")
         sys.exit(1 if health.should_abort() else 0)
 
     universe = build_universe(session, health, notes)

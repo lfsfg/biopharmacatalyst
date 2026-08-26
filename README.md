@@ -378,10 +378,26 @@ catalyst_screen/
 |---|---|
 | `SEC_USER_AGENT` | Required. SEC blocks clients that do not identify themselves. |
 
+## Dry run
+
+`--dry-run` probes all four sources and reports health without running the
+screen or writing candidates. Use it to check the pipeline before trusting a
+scheduled run, and after any upstream site change.
+
+| Source | What the probe proves |
+|---|---|
+| `finviz` | Industry tokens are valid, the results table parses, tickers are clean symbols, and the short-float column exists under one of its aliases |
+| `edgar:fts` | "PDUFA" across all 8-Ks in 150 days returns hits — zero means the integration is broken, not that nobody mentioned it |
+| `clinicaltrials.gov` | A query that must return studies does |
+| `pdufa.bio` | The calendar fetches and parses to some rows |
+
+It writes `catalyst_probe_<date>.txt` and a manifest with status
+`DRY_RUN_OK` / `DRY_RUN_FAILED`, and exits non-zero if a required source
+failed — so a red job means a genuinely broken source.
+
 ## Known limitation
 
 The four upstream sources are unreachable from the environment this was
 authored in, so no live request was made against any of them. Everything is
 verified offline against fixtures — including fixtures reproducing each
-observed bug. Use `--dry-run` (workflow input `dry_run`) to probe the sources
-before trusting a scheduled run.
+observed bug.
