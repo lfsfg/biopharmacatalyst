@@ -108,7 +108,23 @@ def fetch(session: requests.Session) -> tuple[dict[str, list[dict]], str]:
     return {}, last
 
 
+MIN_EXPECTED_TICKERS = 5
+
+
 def probe(session: requests.Session) -> tuple[bool, str, dict]:
-    """Does the calendar fetch and parse to any rows at all?"""
+    """Does the calendar parse to a plausible number of rows?
+
+    "More than zero" is too weak a contract: the first dry run returned a
+    single ticker and was graded OK, when a PDUFA calendar with one entry is
+    obviously a parse failure. Require a floor, and dump a sample so a
+    shortfall is diagnosable.
+    """
     parsed, detail = fetch(session)
-    return bool(parsed), detail, {"tickers": len(parsed)}
+    metrics = {"tickers": len(parsed)}
+    if parsed:
+        metrics["sample"] = ",".join(list(parsed)[:8])
+    if len(parsed) >= MIN_EXPECTED_TICKERS:
+        return True, detail, metrics
+    return False, (f"parsed only {len(parsed)} ticker(s), expected at least "
+                   f"{MIN_EXPECTED_TICKERS} — the layout has probably changed "
+                   f"({detail})"), metrics

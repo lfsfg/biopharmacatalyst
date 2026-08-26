@@ -97,6 +97,28 @@ def test_ticker_read_from_href_not_text():
     assert rows[0]["_ticker"] == "BHVN"
 
 
+@pytest.mark.parametrize("cell,expected", [
+    # Classic Finviz quote link.
+    ('<td><a href="quote.ashx?t=ABEO&ty=c"><span>A</span>ABEO</a></td>', "ABEO"),
+    # REGRESSION: badge element sits OUTSIDE the anchor, so cell text reads
+    # "AABEO". The live dry run produced exactly this for every row.
+    ('<td><span class="badge">A</span><a href="/x/y">ABEO</a></td>', "ABEO"),
+    # Path-style link.
+    ('<td><span>A</span><a href="/quote/ABEO/">ABEO</a></td>', "ABEO"),
+    # Plain cell, no anchor.
+    ('<td>ABEO</td>', "ABEO"),
+    # Real symbols with repeated leading letters must survive untouched.
+    ('<td><a href="quote.ashx?t=AA">AA</a></td>', "AA"),
+    ('<td><a href="quote.ashx?t=AAPL">AAPL</a></td>', "AAPL"),
+    ('<td><span class="badge">A</span><a href="/x">AAPL</a></td>', "AAPL"),
+])
+def test_ticker_extraction_across_markup_variants(cell, expected):
+    html = (f'<table><tr><th>Ticker</th><th>Company</th></tr>'
+            f'<tr>{cell}<td>Co</td></tr></table>')
+    rows = finviz.parse_screener_table(html)
+    assert rows and rows[0]["_ticker"] == expected
+
+
 def test_ticker_fallback_never_mangles_real_symbols():
     """A repair heuristic would turn AAPL into APL. It must not exist."""
     html = """<table><tr><th>Ticker</th><th>Company</th></tr>
