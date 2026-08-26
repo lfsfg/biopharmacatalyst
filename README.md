@@ -175,3 +175,105 @@ Rows are sorted by `event_date` ascending, then `float_shares` ascending
 | `pandas` | CSV output |
 | `pytz` | ET timezone handling |
 | `gitpython` | (Available for local git ops if needed) |
+
+---
+
+# Quarterly Biotech Catalyst Screener
+
+A second, independent pipeline in this repo. Where the FDA scanner runs daily
+and filters by float, this one runs **once per quarter** and filters by
+**short float**, hunting next-quarter binary catalysts in heavily-shorted
+US biotech / drug-manufacturer names.
+
+It is deliberately split into two stages, because the two halves need
+different capabilities:
+
+| Stage | Runs in | Does | Why there |
+|---|---|---|---|
+| **A — collection** | GitHub Actions (`quarterly_catalyst_screen.yml`) | Finviz screen + EDGAR / ClinicalTrials.gov / pdufa.bio catalyst check → `catalyst_screen/*.csv` | Deterministic, scriptable, and Actions runners have unrestricted egress |
+| **B — research** | Claude Routine (quarterly trigger) | Reads Stage A's CSV, researches the top 20, writes the final dated document | Needs judgement + web research, not scraping |
+
+## Schedule
+
+`cron: '30 13 17 3,6,9,12 *'` — 13:30 UTC on the 17th of March, June,
+September and December.
+
+The 17th falls inside the second-to-last week of every quarter-ending month,
+which leaves roughly two weeks of runway before the new quarter begins.
+
+| Run date | Screens for |
+|---|---|
+| 17 Mar | Q2 (Apr 1 – Jun 30) |
+| 17 Jun | Q3 (Jul 1 – Sep 30) |
+| 17 Sep | Q4 (Oct 1 – Dec 31) |
+| 17 Dec | Q1 of the following year |
+
+> **Scheduled workflows only run from the repository default branch.** This
+> workflow must be merged into the default branch before the cron will fire.
+> Until then, trigger it with **Actions → Quarterly Biotech Catalyst Screen →
+> Run workflow**.
+
+## Screen definition (Stage A)
+
+Finviz filters, applied as `sec_healthcare, geo_usa, sh_opt_optionshort,
+sh_short_o10` plus one industry token per pass:
+
+- Sector = Healthcare
+- Industry = Biotechnology **or** Drug Manufacturers—General **or**
+  Drug Manufacturers—Specialty & Generic
+- Country = USA
+- Optionable = Yes, Shortable = Yes
+- Short Float > 10%
+
+Finviz accepts only one industry token per request, so the script runs one
+pass per industry and unions the results. For each industry it fetches both
+the Overview view (`v=111`, for company name and market cap) and the
+Ownership view (`v=131`, for Float Short and Short Ratio) and joins them on
+ticker. **Short Ratio is days-to-cover.**
+
+Tables are parsed by **column header name**, not by index, so a Finviz column
+reorder degrades gracefully instead of silently mis-mapping data.
+
+## Catalyst check (Stage A)
+
+A ticker survives only with a hit from at least one of:
+
+| Source | Query |
+|---|---|
+| SEC EDGAR full-text search | 8-K / 10-Q filed in the last 120 days from that CIK containing `topline`, `top-line`, `PDUFA`, `target action date`, `BLA` or `NDA` |
+| ClinicalTrials.gov API v2 | company as lead sponsor, `AREA[Phase]PHASE3`, `AREA[PrimaryCompletionDate]RANGE[<qstart>,<qend>]` |
+| pdufa.bio | a published PDUFA / readout date inside the target quarter |
+
+Survivors are ranked by catalyst-date proximity. The CSV marks the top 20
+`research_tier = FULL` and the remainder `FLAGGED_ONLY`.
+
+## Fail-loud contract
+
+If the Finviz stage returns **zero** tickers the script writes a failure log
+and **exits 1** rather than committing an empty CSV, and the commit step is
+skipped. The diagnostic log is still uploaded as a workflow artifact.
+
+This is a direct response to a real failure in this repo: `fda_scanner.py`
+has committed **122 consecutive empty CSVs** since 2026-04-26 while its
+workflow reported success every single day. A screener that cannot
+distinguish "no matches" from "scraper broken" is worse than no screener.
+
+## Output
+
+```
+catalyst_screen/
+├── catalyst_candidates_YYYY-MM-DD.csv       # ranked candidates
+├── catalyst_candidates_YYYY-MM-DD_log.txt   # human-readable summary
+└── catalyst_run_YYYY-MM-DD.debug.log        # full run log
+```
+
+CSV columns: `rank`, `research_tier`, `ticker`, `company_name`, `industry`,
+`market_cap`, `short_float_pct`, `days_to_cover`, `catalyst_sources`,
+`earliest_catalyst_date`, `catalyst_detail`, `edgar_hits`, `ctgov_hits`,
+`pdufa_hits`.
+
+## Optional repository secret
+
+| Secret | Purpose |
+|---|---|
+| `SEC_USER_AGENT` | SEC requires a descriptive UA with contact info (e.g. `Jane Doe jane@example.com`). Without it EDGAR may rate-limit or reject requests. |

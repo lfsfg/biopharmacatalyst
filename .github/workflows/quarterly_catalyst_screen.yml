@@ -1,0 +1,82 @@
+name: Quarterly Biotech Catalyst Screen
+
+# Fires in the second-to-last week of each calendar quarter and builds the
+# candidate list for the NEXT quarter's catalysts.
+#
+#   17 Mar -> screens for Q2      17 Jun -> screens for Q3
+#   17 Sep -> screens for Q4      17 Dec -> screens for Q1 (next year)
+#
+# The 17th sits inside the second-to-last week of every quarter-ending month
+# (Mar/Dec: last week 25-31, 2nd-to-last 18-24; Jun/Sep: last week 24-30,
+# 2nd-to-last 17-23), leaving ~2 weeks of runway before the quarter turns.
+#
+# NOTE: GitHub only runs scheduled workflows from the repository's DEFAULT
+# branch. This file must be merged into the default branch before the cron
+# will ever fire; until then use the manual "Run workflow" button.
+
+on:
+  schedule:
+    # 13:30 UTC = 09:30 EDT (Mar/Jun/Sep) / 08:30 EST (Dec)
+    - cron: '30 13 17 3,6,9,12 *'
+  workflow_dispatch:
+    inputs:
+      allow_empty:
+        description: 'Write output even if the Finviz screen returns zero tickers'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  catalyst-screen:
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: catalyst-screen-${{ github.ref }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run catalyst screener (Stage A)
+        env:
+          GITHUB_REPO_PATH: ${{ github.workspace }}
+          SKIP_GIT_PUSH: 'true'
+          # SEC requires a descriptive UA with contact info on every request.
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          ALLOW_EMPTY: ${{ inputs.allow_empty && 'true' || 'false' }}
+        run: python catalyst_screener.py
+
+      # Runs even when the screener exits non-zero, so a failed run still
+      # leaves the diagnostic log attached to the job.
+      - name: Upload results as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalyst-screen-${{ github.run_id }}
+          path: catalyst_screen/
+          retention-days: 90
+
+      - name: Commit and push results
+        if: success()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add catalyst_screen/
+          git diff --staged --quiet && echo "Nothing new to commit." && exit 0
+          git commit -m "Quarterly catalyst screen $(TZ=America/New_York date '+%Y-%m-%d') [skip ci]"
+          git push
