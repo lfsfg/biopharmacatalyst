@@ -6,13 +6,8 @@ name: Quarterly Biotech Catalyst Screen
 #   17 Mar -> screens for Q2      17 Jun -> screens for Q3
 #   17 Sep -> screens for Q4      17 Dec -> screens for Q1 (next year)
 #
-# The 17th sits inside the second-to-last week of every quarter-ending month
-# (Mar/Dec: last week 25-31, 2nd-to-last 18-24; Jun/Sep: last week 24-30,
-# 2nd-to-last 17-23), leaving ~2 weeks of runway before the quarter turns.
-#
-# NOTE: GitHub only runs scheduled workflows from the repository's DEFAULT
-# branch. This file must be merged into the default branch before the cron
-# will ever fire; until then use the manual "Run workflow" button.
+# The 17th sits inside the second-to-last week of every quarter-ending month,
+# leaving ~2 weeks of runway before the quarter turns.
 
 on:
   schedule:
@@ -20,8 +15,17 @@ on:
     - cron: '30 13 17 3,6,9,12 *'
   workflow_dispatch:
     inputs:
-      allow_empty:
-        description: 'Write output even if the Finviz screen returns zero tickers'
+      dry_run:
+        description: 'Probe the data sources and report health, then stop'
+        type: boolean
+        default: false
+      rank_by:
+        description: 'Ranking strategy'
+        type: choice
+        options: ['tier-then-date', 'date']
+        default: 'tier-then-date'
+      allow_degraded:
+        description: 'Exit 0 even if a required source failed (diagnostics only)'
         type: boolean
         default: false
 
@@ -52,17 +56,34 @@ jobs:
       - name: Install Python dependencies
         run: pip install --upgrade pip && pip install -r requirements.txt
 
+      # Parsing regressions are the failure mode that actually bit this
+      # project, so the offline suite gates every run.
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      - name: Verify SEC_USER_AGENT is configured
+        run: |
+          if [ -z "${{ secrets.SEC_USER_AGENT }}" ]; then
+            echo "::error::SEC_USER_AGENT secret is not set. SEC requires a real"
+            echo "::error::contact string (e.g. 'Jane Doe jane@company.com')."
+            echo "::error::Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
       - name: Run catalyst screener (Stage A)
         env:
           GITHUB_REPO_PATH: ${{ github.workspace }}
-          SKIP_GIT_PUSH: 'true'
-          # SEC requires a descriptive UA with contact info on every request.
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-          ALLOW_EMPTY: ${{ inputs.allow_empty && 'true' || 'false' }}
-        run: python catalyst_screener.py
+          RANK_BY: ${{ inputs.rank_by || 'tier-then-date' }}
+          ALLOW_DEGRADED: ${{ inputs.allow_degraded && 'true' || 'false' }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python catalyst_screener.py --dry-run
+          else
+            python catalyst_screener.py
+          fi
 
-      # Runs even when the screener exits non-zero, so a failed run still
-      # leaves the diagnostic log attached to the job.
+      # Runs even on failure so a broken run still leaves its diagnostics.
       - name: Upload results as workflow artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -71,8 +92,21 @@ jobs:
           path: catalyst_screen/
           retention-days: 90
 
+      - name: Summarise run health
+        if: always()
+        run: |
+          latest=$(ls -1 catalyst_screen/catalyst_manifest_*.json 2>/dev/null | tail -1)
+          if [ -n "$latest" ]; then
+            {
+              echo "### Catalyst screen run health"
+              echo '```json'
+              cat "$latest"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Commit and push results
-        if: success()
+        if: success() && inputs.dry_run != true
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

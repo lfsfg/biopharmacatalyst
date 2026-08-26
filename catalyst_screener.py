@@ -1,629 +1,463 @@
 #!/usr/bin/env python3
 """
-Quarterly Biotech Catalyst Screener — Stage A (deterministic collection).
+Quarterly Biotech Catalyst Screener — Stage A (v2).
 
-Runs in the second-to-last week of the current calendar quarter and builds the
-candidate list for NEXT quarter's catalysts.
+Screens heavily-shorted US biotech / drug-manufacturer names for binary
+catalysts landing in the NEXT calendar quarter, and emits a ranked candidate
+CSV plus a machine-readable run manifest for Stage B.
 
-Pipeline
---------
-1. Finviz screener  -> universe of US healthcare (Biotechnology + Drug
-   Manufacturers General/Specialty&Generic) names that are optionable,
-   shortable and carry short float > 10%.  Captures ticker, company,
-   market cap, short float %, short ratio (= days to cover).
-2. Per ticker, look for a verifiable NEXT-QUARTER catalyst in:
-     - SEC EDGAR full-text search (efts.sec.gov)  8-K / 10-Q language
-     - ClinicalTrials.gov API v2 (Phase 3, primary/estimated completion
-       inside the target quarter, company as lead sponsor)
-     - pdufa.bio public PDUFA / readout calendar
-3. Emit a candidates CSV + a human-readable log.  Stage B (the Claude
-   Routine) reads the CSV and does the research/synthesis half.
+What changed from v1, and why
+-----------------------------
+v1's first live run (2026-08-26) "succeeded" while being substantially
+broken: every ticker was corrupted, short float was empty on all 213 names,
+one of three industries silently returned nothing, and two of four catalyst
+sources contributed zero rows. The job went green because the only guard
+asked "is the universe empty?".
 
-Design note: this script FAILS LOUDLY.  If the Finviz stage yields zero
-tickers it exits non-zero rather than committing an empty CSV.  The sibling
-fda_scanner.py in this repo has silently committed 122 consecutive empty
-files; that failure mode is deliberately not repeated here.
+v2 therefore adds a per-source health contract (catalyst/health.py). Each
+source declares what it must deliver; the run fails loudly when a required
+one does not. Several sources also carry a probe() that asks a question with
+a guaranteed non-empty answer, which distinguishes "this source is broken"
+from "there genuinely are no matches" -- the ambiguity that hid v1's bugs.
 
 Environment
 -----------
 GITHUB_REPO_PATH   repo root (defaults to this file's directory)
-SKIP_GIT_PUSH      'true' to let CI handle the commit
-SEC_USER_AGENT     required by SEC; "Name email@example.com"
-ALLOW_EMPTY        'true' to downgrade the empty-universe failure to a warning
+SEC_USER_AGENT     REQUIRED. "Name email@example.com" — SEC blocks anonymous
+                   clients, and v1's fabricated fallback risked an IP ban.
+SKIP_SHORT_FALLBACK  'true' to skip the yfinance cross-check (faster)
+SKIP_FUNDAMENTALS    'true' to skip cash-runway lookups (faster)
+RANK_BY            'tier-then-date' (default) or 'date'
+ALLOW_DEGRADED     'true' to exit 0 even when a required source failed
 """
 
 from __future__ import annotations
 
-import calendar
-import csv
-import json
+import argparse
 import logging
 import os
-import re
 import sys
 import time
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from typing import Iterable, Optional
 
-import pytz
 import requests
-from bs4 import BeautifulSoup
 
-# --------------------------------------------------------------------------
-# Config
-# --------------------------------------------------------------------------
+from catalyst import fundamentals
+from catalyst.catalysts import CatalystSet, TIER_LABEL, rank as rank_sets
+from catalyst.diffing import annotate, find_previous
+from catalyst.health import HealthRegistry, Status, assess_coverage
+from catalyst.periods import next_quarter_window
+from catalyst.report import write_csv, write_manifest, write_summary
+from catalyst.sources import ctgov, edgar, finviz, pdufa, shortinterest
 
-ET_TZ = pytz.timezone("America/New_York")
+FULL_RESEARCH_LIMIT = 20
+MIN_SHORT_FLOAT_COVERAGE = 0.80
 
-FINVIZ_BASE = "https://finviz.com/screener.ashx"
-
-# Sector/geo/option/short filters shared by every pass.
-#   sec_healthcare        Sector = Healthcare
-#   geo_usa               Country = USA
-#   sh_opt_optionshort    Optionable = Yes AND Shortable = Yes
-#   sh_short_o10          Short Float > 10%
-FINVIZ_BASE_FILTERS = ["sec_healthcare", "geo_usa", "sh_opt_optionshort", "sh_short_o10"]
-
-# Finviz allows only ONE industry token per request on the free screener, so we
-# run one pass per industry and union the results.
-FINVIZ_INDUSTRIES = {
-    "Biotechnology": "ind_biotechnology",
-    "Drug Manufacturers - General": "ind_drugmanufacturersgeneral",
-    "Drug Manufacturers - Specialty & Generic": "ind_drugmanufacturersspecialtygeneric",
-}
-
-# v=111 Overview  -> Ticker, Company, Sector, Industry, Country, Market Cap
-# v=131 Ownership -> Ticker, Float Short, Short Ratio (= days to cover)
-FINVIZ_VIEWS = {"overview": "111", "ownership": "131"}
-
-FINVIZ_ROWS_PER_PAGE = 20
-FINVIZ_MAX_PAGES = 25          # 500 rows per industry/view is far beyond need
-
-SEC_TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
-EDGAR_FTS_URL = "https://efts.sec.gov/LATEST/search-index"
-EDGAR_FORMS = "8-K,10-Q"
-
-# Phrases that indicate a dated, near-term catalyst.
-EDGAR_PHRASES = [
-    "topline",
-    "top-line",
-    "PDUFA",
-    "target action date",
-    "BLA",
-    "NDA",
-]
-
-CTGOV_URL = "https://clinicaltrials.gov/api/v2/studies"
-CTGOV_FIELDS = (
-    "protocolSection.identificationModule.nctId,"
-    "protocolSection.identificationModule.briefTitle,"
-    "protocolSection.sponsorCollaboratorsModule.leadSponsor.name,"
-    "protocolSection.designModule.phases,"
-    "protocolSection.statusModule.primaryCompletionDateStruct.date,"
-    "protocolSection.statusModule.completionDateStruct.date,"
-    "protocolSection.statusModule.overallStatus,"
-    "protocolSection.conditionsModule.conditions,"
-    "protocolSection.armsInterventionsModule.interventions"
-)
-
-PDUFA_URL = "https://pdufa.bio/"
-
-HTML_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-REQUEST_TIMEOUT = 30
-POLITE_DELAY = 0.4      # between requests to the same host
+log = logging.getLogger("catalyst_screener")
 
 
-# --------------------------------------------------------------------------
-# Quarter maths
-# --------------------------------------------------------------------------
-
-def next_quarter_window(today: date) -> tuple[date, date, str]:
-    """Return (start, end, label) for the calendar quarter AFTER today's."""
-    q = (today.month - 1) // 3 + 1
-    if q == 4:
-        year, nq = today.year + 1, 1
-    else:
-        year, nq = today.year, q + 1
-    start_month = 3 * (nq - 1) + 1
-    end_month = start_month + 2
-    start = date(year, start_month, 1)
-    end = date(year, end_month, calendar.monthrange(year, end_month)[1])
-    return start, end, f"Q{nq} {year}"
-
-
-# --------------------------------------------------------------------------
-# Logging
-# --------------------------------------------------------------------------
-
-def setup_logging(log_path: Path) -> logging.Logger:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("catalyst_screener")
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    fh = logging.FileHandler(log_path, encoding="utf-8")
+def setup_logging(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+    fh = logging.FileHandler(path, encoding="utf-8")
     fh.setFormatter(fmt)
     sh = logging.StreamHandler(sys.stdout)
     sh.setFormatter(fmt)
-    logger.addHandler(fh)
-    logger.addHandler(sh)
-    return logger
+    root.addHandler(fh)
+    root.addHandler(sh)
 
 
 # --------------------------------------------------------------------------
-# Finviz
+# Stage 1 — universe
 # --------------------------------------------------------------------------
 
-def _finviz_page(view: str, industry_token: str, offset: int,
-                 logger: logging.Logger) -> Optional[str]:
-    filters = ",".join(FINVIZ_BASE_FILTERS + [industry_token])
-    params = {"v": view, "f": filters, "r": str(offset)}
-    try:
-        resp = requests.get(FINVIZ_BASE, params=params, headers=HTML_HEADERS,
-                            timeout=REQUEST_TIMEOUT)
-    except requests.RequestException as exc:
-        logger.error("Finviz request failed (%s, r=%d): %s", industry_token, offset, exc)
-        return None
-    if resp.status_code != 200:
-        logger.error("Finviz HTTP %d (%s, r=%d)", resp.status_code, industry_token, offset)
-        return None
-    return resp.text
-
-
-def _parse_finviz_table(html: str) -> list[dict]:
-    """Parse the screener results table, mapping columns by HEADER NAME.
-
-    Index-based parsing breaks whenever Finviz reorders columns; name-based
-    parsing degrades gracefully instead.
-    """
-    soup = BeautifulSoup(html, "lxml")
-
-    best: list[dict] = []
-    for table in soup.find_all("table"):
-        rows = table.find_all("tr")
-        if len(rows) < 2:
-            continue
-        header_cells = [c.get_text(strip=True) for c in rows[0].find_all(["td", "th"])]
-        if "Ticker" not in header_cells:
-            continue
-        idx = {name: i for i, name in enumerate(header_cells)}
-        parsed: list[dict] = []
-        for row in rows[1:]:
-            cells = [c.get_text(strip=True) for c in row.find_all("td")]
-            if len(cells) != len(header_cells):
-                continue
-            rec = {name: cells[i] for name, i in idx.items() if i < len(cells)}
-            if rec.get("Ticker"):
-                parsed.append(rec)
-        if len(parsed) > len(best):
-            best = parsed
-    return best
-
-
-def _finviz_collect(view_key: str, industry_token: str,
-                    logger: logging.Logger) -> dict[str, dict]:
-    view = FINVIZ_VIEWS[view_key]
-    out: dict[str, dict] = {}
-    offset = 1
-    for _ in range(FINVIZ_MAX_PAGES):
-        html = _finviz_page(view, industry_token, offset, logger)
-        if html is None:
-            break
-        rows = _parse_finviz_table(html)
-        if not rows:
-            break
-        for rec in rows:
-            out.setdefault(rec["Ticker"].upper(), rec)
-        if len(rows) < FINVIZ_ROWS_PER_PAGE:
-            break
-        offset += FINVIZ_ROWS_PER_PAGE
-        time.sleep(POLITE_DELAY)
-    return out
-
-
-def _pct_to_float(value: str) -> Optional[float]:
-    if not value:
-        return None
-    m = re.search(r"-?\d+(?:\.\d+)?", value.replace(",", ""))
-    return float(m.group()) if m else None
-
-
-def run_finviz_screen(logger: logging.Logger) -> tuple[list[dict], list[str]]:
-    """Union the per-industry screens and join overview + ownership views."""
-    errors: list[str] = []
+def build_universe(session: requests.Session, health: HealthRegistry,
+                   notes: list[str]) -> dict[str, dict]:
     universe: dict[str, dict] = {}
+    industry_counts: dict[str, int] = {}
 
-    for industry_name, token in FINVIZ_INDUSTRIES.items():
-        overview = _finviz_collect("overview", token, logger)
-        time.sleep(POLITE_DELAY)
-        ownership = _finviz_collect("ownership", token, logger)
+    for name, token in finviz.INDUSTRIES.items():
+        filters = finviz.BASE_FILTERS + [token]
+        overview = finviz.collect("overview", filters, session)
+        time.sleep(finviz.DELAY)
+        ownership = finviz.collect("ownership", filters, session)
+        industry_counts[name] = len(overview)
+        log.info("Finviz %-42s overview=%3d ownership=%3d",
+                 name, len(overview), len(ownership))
 
-        logger.info("Finviz %-42s overview=%3d ownership=%3d",
-                    industry_name, len(overview), len(ownership))
         if not overview:
-            errors.append(f"Finviz returned no rows for industry '{industry_name}'")
+            # Disambiguate a bad token from a genuinely empty result.
+            valid = finviz.probe_industry_token(token, session)
+            if valid:
+                notes.append(
+                    f"Industry '{name}' returned 0 rows under the full filters, "
+                    f"but token '{token}' is valid (it returns rows without the "
+                    f"short-float filter) — so no company in it has >10% short "
+                    f"float. This is a real result, not a bug.")
+            else:
+                notes.append(
+                    f"Industry '{name}': token '{token}' returned 0 rows even "
+                    f"without the short-float filter — the token is WRONG or "
+                    f"Finviz is blocking. This industry is missing entirely.")
+                health.record(f"finviz:{token}", status=Status.FAILED,
+                              required=True,
+                              detail=f"industry token '{token}' appears invalid",
+                              rows=0)
+            continue
 
         for ticker, ov in overview.items():
             own = ownership.get(ticker, {})
-            short_float = _pct_to_float(own.get("Float Short", ""))
-            short_ratio = _pct_to_float(own.get("Short Ratio", ""))
             if ticker in universe:
-                universe[ticker]["industry"] = (
-                    f"{universe[ticker]['industry']} / {industry_name}"
-                )
+                universe[ticker]["industry"] += f" / {name}"
                 continue
+            merged = {**ov, **own}
             universe[ticker] = {
                 "ticker": ticker,
-                "company_name": ov.get("Company", ""),
-                "industry": industry_name,
-                "market_cap": ov.get("Market Cap", ""),
-                "short_float_pct": short_float if short_float is not None else "",
-                "days_to_cover": short_ratio if short_ratio is not None else "",
+                "company_name": finviz.resolve(ov, "company") or "",
+                "industry": name,
+                "market_cap": finviz.resolve(ov, "market_cap") or "",
+                "short_float_finviz": finviz.to_number(
+                    finviz.resolve(merged, "short_float")),
+                "days_to_cover": finviz.to_number(
+                    finviz.resolve(merged, "short_ratio")),
+                "float_shares": finviz.to_number(
+                    finviz.resolve(merged, "float_shares")),
+                "avg_volume": finviz.to_number(
+                    finviz.resolve(merged, "avg_volume")),
             }
-            if short_float is None:
-                errors.append(f"{ticker}: short float missing from Finviz ownership view")
 
-    return list(universe.values()), errors
-
-
-# --------------------------------------------------------------------------
-# SEC EDGAR
-# --------------------------------------------------------------------------
-
-def _sec_headers() -> dict:
-    ua = os.environ.get("SEC_USER_AGENT", "").strip()
-    if not ua:
-        ua = "biopharmacatalyst-screener contact@example.com"
-    return {"User-Agent": ua, "Accept": "application/json"}
+    health.record("finviz:universe",
+                  status=Status.OK if universe else Status.FAILED,
+                  required=True,
+                  detail="" if universe else "screener returned zero tickers",
+                  tickers=len(universe),
+                  industries=len([c for c in industry_counts.values() if c]))
+    return universe
 
 
-def load_cik_map(logger: logging.Logger) -> dict[str, str]:
-    """ticker -> 10-digit zero-padded CIK."""
-    try:
-        resp = requests.get(SEC_TICKER_MAP_URL, headers=_sec_headers(),
-                            timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        logger.error("Could not load SEC ticker->CIK map: %s", exc)
-        return {}
-    out = {}
-    for entry in data.values():
-        out[str(entry["ticker"]).upper()] = str(entry["cik_str"]).zfill(10)
-    logger.info("Loaded SEC ticker->CIK map (%d entries)", len(out))
-    return out
+def validate_tickers(universe: dict[str, dict], cik_map: dict[str, str],
+                     health: HealthRegistry, notes: list[str]) -> dict[str, dict]:
+    """Drop symbols the SEC does not know.
 
-
-def check_edgar(ticker: str, cik: Optional[str], start: date, end: date,
-                logger: logging.Logger) -> list[dict]:
-    """Full-text search recent filings for catalyst language.
-
-    Searches the ~120 days BEFORE the run (companies announce guidance ahead of
-    the event), not the target window itself.
+    This is what catches v1's doubled tickers (BBHVN for BHVN) definitively,
+    without guessing at string repairs that would corrupt real symbols.
     """
-    if not cik:
-        return []
-    today = date.today()
-    lookback_start = date.fromordinal(today.toordinal() - 120)
-    hits: list[dict] = []
+    if not cik_map:
+        health.record("ticker:validation", status=Status.DEGRADED,
+                      detail="SEC ticker map unavailable; symbols unvalidated",
+                      checked=0)
+        return universe
 
-    for phrase in EDGAR_PHRASES:
-        params = {
-            "q": f'"{phrase}"',
-            "forms": EDGAR_FORMS,
-            "ciks": cik,
-            "dateRange": "custom",
-            "startdt": lookback_start.isoformat(),
-            "enddt": today.isoformat(),
-        }
-        try:
-            resp = requests.get(EDGAR_FTS_URL, params=params,
-                                headers=_sec_headers(), timeout=REQUEST_TIMEOUT)
-            if resp.status_code != 200:
-                logger.warning("EDGAR FTS HTTP %d for %s (%s)",
-                               resp.status_code, ticker, phrase)
-                continue
-            payload = resp.json()
-        except Exception as exc:
-            logger.warning("EDGAR FTS failed for %s (%s): %s", ticker, phrase, exc)
-            continue
+    good, bad = {}, []
+    for ticker, rec in universe.items():
+        if ticker in cik_map:
+            rec["cik"] = cik_map[ticker]
+            good[ticker] = rec
+        else:
+            bad.append(ticker)
 
-        total = (payload.get("hits", {}).get("total", {}) or {}).get("value", 0)
-        if not total:
-            continue
-        for hit in payload.get("hits", {}).get("hits", [])[:3]:
-            src = hit.get("_source", {})
-            hits.append({
-                "phrase": phrase,
-                "form": src.get("root_form") or src.get("form", ""),
-                "filed": src.get("file_date", ""),
-                "adsh": src.get("adsh", ""),
-            })
-        time.sleep(POLITE_DELAY)
+    if bad:
+        notes.append(
+            f"{len(bad)} symbol(s) not found in the SEC ticker map and dropped: "
+            f"{', '.join(sorted(bad)[:15])}"
+            + (" ..." if len(bad) > 15 else ""))
 
-    return hits
+    ratio = len(good) / len(universe) if universe else 0
+    health.record(
+        "ticker:validation",
+        status=Status.OK if ratio >= 0.9 else
+               (Status.DEGRADED if ratio >= 0.5 else Status.FAILED),
+        required=True,
+        detail="" if ratio >= 0.9 else
+               f"only {ratio:.0%} of screener symbols are known to the SEC — "
+               f"the ticker column is probably being parsed incorrectly",
+        valid=len(good), dropped=len(bad))
+    return good
 
 
-# --------------------------------------------------------------------------
-# ClinicalTrials.gov v2
-# --------------------------------------------------------------------------
+def enrich_short_interest(universe: dict[str, dict], health: HealthRegistry,
+                          notes: list[str], *, use_fallback: bool) -> None:
+    total = len(universe)
+    finviz_present = sum(1 for r in universe.values()
+                         if r.get("short_float_finviz") is not None)
+    health.add(assess_coverage("finviz:short_float", finviz_present, total,
+                               required=False,
+                               min_ratio=MIN_SHORT_FLOAT_COVERAGE,
+                               what="short float"))
 
-def check_ctgov(company: str, start: date, end: date,
-                logger: logging.Logger) -> list[dict]:
-    """Phase 3 trials led by `company` completing inside the target window."""
-    if not company:
-        return []
-    advanced = (
-        f"AREA[Phase]PHASE3 AND "
-        f"AREA[PrimaryCompletionDate]RANGE[{start.isoformat()},{end.isoformat()}]"
-    )
-    params = {
-        "query.spons": company,
-        "filter.advanced": advanced,
-        "fields": CTGOV_FIELDS,
-        "pageSize": "50",
-    }
-    try:
-        resp = requests.get(CTGOV_URL, params=params, timeout=REQUEST_TIMEOUT,
-                            headers={"Accept": "application/json"})
-        if resp.status_code != 200:
-            logger.warning("CT.gov HTTP %d for %s", resp.status_code, company)
-            return []
-        payload = resp.json()
-    except Exception as exc:
-        logger.warning("CT.gov failed for %s: %s", company, exc)
-        return []
+    if use_fallback and finviz_present < total:
+        log.warning("Finviz short float covers %d/%d rows — using yfinance for "
+                    "the remainder", finviz_present, total)
 
-    out: list[dict] = []
-    for study in payload.get("studies", []):
-        proto = study.get("protocolSection", {})
-        ident = proto.get("identificationModule", {})
-        status = proto.get("statusModule", {})
-        pcd = (status.get("primaryCompletionDateStruct") or {}).get("date", "")
-        out.append({
-            "nct_id": ident.get("nctId", ""),
-            "title": ident.get("briefTitle", ""),
-            "sponsor": (proto.get("sponsorCollaboratorsModule", {})
-                        .get("leadSponsor", {}) or {}).get("name", ""),
-            "primary_completion": pcd,
-            "status": status.get("overallStatus", ""),
-            "conditions": "; ".join(
-                (proto.get("conditionsModule", {}) or {}).get("conditions", []) or []
-            ),
-        })
-    return out
+    resolved = 0
+    for rec in universe.values():
+        primary = rec.get("short_float_finviz")
+        secondary = None
+        if use_fallback and primary is None:
+            data = shortinterest.fetch(rec["ticker"])
+            secondary = data.short_float_pct
+            for field in ("days_to_cover", "float_shares", "avg_volume"):
+                if rec.get(field) is None:
+                    rec[field] = getattr(data, field)
+
+        value, source, note = shortinterest.reconcile(primary, secondary)
+        rec["short_float_pct"] = value
+        rec["short_float_source"] = source
+        rec["short_float_note"] = note
+        if value is not None:
+            resolved += 1
+
+    combined = health.add(
+        assess_coverage("short_float:combined", resolved, total,
+                        required=True, min_ratio=MIN_SHORT_FLOAT_COVERAGE,
+                        what="short float (any source)"))
+    if combined.status is not Status.OK:
+        notes.append(
+            "Short float is the filter that defines this screen. "
+            f"{resolved}/{total} rows have it. "
+            "v1 shipped a run where this was 0/213 and still passed.")
 
 
 # --------------------------------------------------------------------------
-# pdufa.bio
+# Stage 2 — catalysts
 # --------------------------------------------------------------------------
 
-_DATE_PATTERNS = (
-    "%Y-%m-%d", "%b %d, %Y", "%B %d, %Y", "%m/%d/%Y", "%d %b %Y", "%b %d %Y",
-)
+def collect_catalysts(session: requests.Session, universe: dict[str, dict],
+                      target, health: HealthRegistry, notes: list[str]
+                      ) -> dict[str, CatalystSet]:
+    sets: dict[str, CatalystSet] = {t: CatalystSet(t) for t in universe}
 
+    # --- pdufa.bio (HARD) -------------------------------------------------
+    pdufa_map, pdufa_detail = pdufa.fetch(session)
+    health.record("pdufa.bio",
+                  status=Status.OK if pdufa_map else Status.DEGRADED,
+                  detail="" if pdufa_map else
+                         f"parsed 0 rows ({pdufa_detail}) — layout likely changed",
+                  tickers=len(pdufa_map))
+    pdufa_hits = 0
+    for ticker, cs in sets.items():
+        for entry in pdufa_map.get(ticker, []):
+            if entry["period"].overlaps(target):
+                cs.add({"source": "pdufa.bio", "tier": pdufa.TIER,
+                        "period": entry["period"], "raw": entry["raw"]})
+                pdufa_hits += 1
 
-def _parse_loose_date(value: str) -> Optional[date]:
-    value = (value or "").strip()
-    if not value:
-        return None
-    for fmt in _DATE_PATTERNS:
-        try:
-            return datetime.strptime(value, fmt).date()
-        except ValueError:
-            continue
-    return None
+    # --- EDGAR (HARD / FIRM) ---------------------------------------------
+    edgar_ok, edgar_detail = edgar.probe(session)
+    if not edgar_ok:
+        health.record("edgar:fts", status=Status.FAILED, required=True,
+                      detail=edgar_detail, hits=0)
+        notes.append("EDGAR full-text search failed its probe; no EDGAR "
+                     "catalysts were collected. " + edgar_detail)
+    else:
+        edgar_hits = 0
+        for i, (ticker, rec) in enumerate(universe.items(), 1):
+            if i % 25 == 0:
+                log.info("EDGAR %d/%d", i, len(universe))
+            for item in edgar.catalysts_for(session, rec.get("cik", ""), target):
+                sets[ticker].add(item)
+                edgar_hits += 1
+        health.record("edgar:fts", status=Status.OK, required=True,
+                      detail=edgar_detail, dated_hits=edgar_hits)
 
+    # --- ClinicalTrials.gov (SOFT) ---------------------------------------
+    ct_ok, ct_detail = ctgov.probe(session)
+    if not ct_ok:
+        health.record("clinicaltrials.gov", status=Status.FAILED, required=True,
+                      detail=ct_detail, hits=0)
+        notes.append("ClinicalTrials.gov failed its probe. " + ct_detail)
+    else:
+        ct_hits = 0
+        for i, (ticker, rec) in enumerate(universe.items(), 1):
+            if i % 25 == 0:
+                log.info("CT.gov %d/%d", i, len(universe))
+            for item in ctgov.phase3_completions(session, rec["company_name"], target):
+                sets[ticker].add(item)
+                ct_hits += 1
+        health.record("clinicaltrials.gov", status=Status.OK, required=True,
+                      detail=ct_detail, hits=ct_hits)
 
-def fetch_pdufa_calendar(logger: logging.Logger) -> tuple[dict[str, list[dict]], list[str]]:
-    """Scrape pdufa.bio into {TICKER: [ {date, raw} ]}."""
-    errors: list[str] = []
-    try:
-        resp = requests.get(PDUFA_URL, headers=HTML_HEADERS, timeout=REQUEST_TIMEOUT)
-        if resp.status_code != 200:
-            errors.append(f"pdufa.bio HTTP {resp.status_code}")
-            return {}, errors
-        html = resp.text
-    except requests.RequestException as exc:
-        errors.append(f"pdufa.bio fetch failed: {exc}")
-        return {}, errors
+    health.record("pdufa.bio:matched", status=Status.OK, hits=pdufa_hits)
 
-    soup = BeautifulSoup(html, "lxml")
-    out: dict[str, list[dict]] = {}
-    for row in soup.find_all("tr"):
-        cells = [c.get_text(" ", strip=True) for c in row.find_all("td")]
-        if len(cells) < 2:
-            continue
-        joined = " | ".join(cells)
-        ticker = None
-        for cell in cells[:3]:
-            m = re.fullmatch(r"\(?([A-Z]{1,5})\)?", cell.strip())
-            if m:
-                ticker = m.group(1)
-                break
-        if not ticker:
-            continue
-        parsed = next((d for d in (_parse_loose_date(c) for c in cells) if d), None)
-        out.setdefault(ticker, []).append({
-            "date": parsed.isoformat() if parsed else "",
-            "raw": joined[:300],
-        })
-
-    if not out:
-        errors.append("pdufa.bio returned no parseable rows (layout may have changed)")
-    logger.info("pdufa.bio: parsed entries for %d tickers", len(out))
-    return out, errors
+    contributing = [name for name, count in (
+        ("pdufa.bio", pdufa_hits),
+        ("EDGAR", sum(1 for s in sets.values()
+                      for i in s.items if i["source"] == "EDGAR")),
+        ("CT.gov", sum(1 for s in sets.values()
+                       for i in s.items if i["source"] == "CT.gov")),
+    ) if count]
+    if len(contributing) <= 1:
+        notes.append(
+            f"Only {len(contributing)} of 3 catalyst sources contributed any "
+            f"rows ({', '.join(contributing) or 'none'}). v1 shipped exactly "
+            "this state — every survivor came from CT.gov alone — and reported "
+            "success.")
+    return sets
 
 
 # --------------------------------------------------------------------------
 # Assembly
 # --------------------------------------------------------------------------
 
-CSV_COLUMNS = [
-    "ticker", "company_name", "industry", "market_cap",
-    "short_float_pct", "days_to_cover",
-    "catalyst_sources", "earliest_catalyst_date", "catalyst_detail",
-    "edgar_hits", "ctgov_hits", "pdufa_hits",
-]
-
-
-def screen_catalysts(universe: list[dict], start: date, end: date,
-                     logger: logging.Logger) -> tuple[list[dict], list[str]]:
-    errors: list[str] = []
-    cik_map = load_cik_map(logger)
-    pdufa_map, pdufa_errors = fetch_pdufa_calendar(logger)
-    errors.extend(pdufa_errors)
-
-    survivors: list[dict] = []
-    for i, rec in enumerate(universe, 1):
-        ticker = rec["ticker"]
-        logger.info("[%d/%d] catalyst check %s", i, len(universe), ticker)
-
-        edgar = check_edgar(ticker, cik_map.get(ticker), start, end, logger)
-        ctgov = check_ctgov(rec.get("company_name", ""), start, end, logger)
-
-        pdufa_all = pdufa_map.get(ticker, [])
-        pdufa = [
-            p for p in pdufa_all
-            if p["date"] and start.isoformat() <= p["date"] <= end.isoformat()
-        ]
-
-        sources, details, dates = [], [], []
-        if edgar:
-            sources.append("EDGAR")
-            phrases = sorted({h["phrase"] for h in edgar})
-            latest = max((h["filed"] for h in edgar if h["filed"]), default="")
-            details.append(f"EDGAR: {', '.join(phrases)} (latest filing {latest})")
-        if ctgov:
-            sources.append("CT.gov")
-            for t in ctgov[:3]:
-                details.append(
-                    f"CT.gov {t['nct_id']} PCD {t['primary_completion']} "
-                    f"[{t['status']}] {t['title'][:80]}"
-                )
-                if t["primary_completion"]:
-                    dates.append(t["primary_completion"])
-        if pdufa:
-            sources.append("pdufa.bio")
-            for p in pdufa[:3]:
-                details.append(f"pdufa.bio {p['date']}: {p['raw'][:120]}")
-                dates.append(p["date"])
-
-        if not sources:
-            continue
-
-        out = dict(rec)
-        out.update({
-            "catalyst_sources": "; ".join(sources),
-            "earliest_catalyst_date": min(dates) if dates else "",
-            "catalyst_detail": " || ".join(details)[:1500],
-            "edgar_hits": len(edgar),
-            "ctgov_hits": len(ctgov),
-            "pdufa_hits": len(pdufa),
-        })
-        survivors.append(out)
-
-    return survivors, errors
-
-
-def write_outputs(survivors: list[dict], universe_size: int, errors: list[str],
-                  label: str, start: date, end: date,
-                  csv_path: Path, log_path: Path, logger: logging.Logger) -> None:
-    # Rank by catalyst-date proximity; undated catalysts sort last.
-    def sort_key(r):
-        d = r.get("earliest_catalyst_date") or ""
-        return (0, d) if d else (1, "")
-
-    survivors.sort(key=sort_key)
-    for i, rec in enumerate(survivors, 1):
-        rec["rank"] = i
-        rec["research_tier"] = "FULL" if i <= 20 else "FLAGGED_ONLY"
-
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with csv_path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["rank", "research_tier"] + CSV_COLUMNS,
-                                extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(survivors)
-    logger.info("Wrote %d candidate rows -> %s", len(survivors), csv_path)
-
-    now_et = datetime.now(ET_TZ)
-    lines = [
-        "Quarterly Biotech Catalyst Screener — Stage A summary",
-        "=" * 64,
-        f"Run timestamp (ET):     {now_et:%Y-%m-%d %H:%M:%S %Z}",
-        f"Target catalyst window: {label}  ({start} .. {end})",
-        "",
-        f"Finviz universe size:        {universe_size}",
-        f"Survived catalyst check:     {len(survivors)}",
-        f"  full research (top 20):    {min(len(survivors), 20)}",
-        f"  flagged-but-unresearched:  {max(len(survivors) - 20, 0)}",
-        "",
-    ]
-    if survivors:
-        lines.append("Candidates (rank. ticker  date  sources):")
-        for rec in survivors:
-            lines.append(
-                f"  {rec['rank']:>3}. {rec['ticker']:<6} "
-                f"{rec.get('earliest_catalyst_date') or 'undated':<12} "
-                f"{rec['catalyst_sources']}"
-            )
-        lines.append("")
-    if errors:
-        lines.append(f"Errors / warnings ({len(errors)}):")
-        lines.extend(f"  - {e}" for e in errors)
-    else:
-        lines.append("No errors.")
-    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info("Wrote summary -> %s", log_path)
+def build_rows(ranked: list[CatalystSet], universe: dict[str, dict],
+               session: requests.Session, *, with_fundamentals: bool) -> list[dict]:
+    rows: list[dict] = []
+    for idx, cs in enumerate(ranked, 1):
+        rec = universe[cs.ticker]
+        period = cs.best_period
+        row = {
+            "rank": idx,
+            "research_tier": "FULL" if idx <= FULL_RESEARCH_LIMIT else "FLAGGED_ONLY",
+            "confidence": cs.best_tier or "",
+            "ticker": cs.ticker,
+            "company_name": rec.get("company_name", ""),
+            "industry": rec.get("industry", ""),
+            "market_cap": rec.get("market_cap", ""),
+            "short_float_pct": ("" if rec.get("short_float_pct") is None
+                                else round(rec["short_float_pct"], 2)),
+            "short_float_source": rec.get("short_float_source", ""),
+            "short_float_note": rec.get("short_float_note", ""),
+            "days_to_cover": ("" if rec.get("days_to_cover") is None
+                              else rec["days_to_cover"]),
+            "float_shares": ("" if rec.get("float_shares") is None
+                             else int(rec["float_shares"])),
+            "avg_volume": ("" if rec.get("avg_volume") is None
+                           else int(rec["avg_volume"])),
+            "catalyst_type": cs.catalyst_type,
+            "catalyst_date": period.display() if period else "",
+            "catalyst_window_start": period.start.isoformat() if period else "",
+            "catalyst_window_end": period.end.isoformat() if period else "",
+            "catalyst_sources": "; ".join(cs.sources),
+            "catalyst_detail": cs.detail()[:1500],
+        }
+        if with_fundamentals and idx <= FULL_RESEARCH_LIMIT:
+            try:
+                fin = fundamentals.cash_runway(session, rec.get("cik", ""),
+                                               edgar.headers())
+            except Exception as exc:            # never fail the run on this
+                log.debug("runway lookup failed for %s: %s", cs.ticker, exc)
+                fin = {}
+            row.update({
+                "cash_usd": fin.get("cash_usd") or "",
+                "quarterly_burn_usd": fin.get("quarterly_burn_usd") or "",
+                "runway_quarters": fin.get("runway_quarters") or "",
+                "dilution_risk": fin.get("dilution_risk", "unknown"),
+            })
+        else:
+            row.update({"cash_usd": "", "quarterly_burn_usd": "",
+                        "runway_quarters": "", "dilution_risk": ""})
+        rows.append(row)
+    return rows
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rank-by", default=os.environ.get("RANK_BY", "tier-then-date"),
+                        choices=["tier-then-date", "date"])
+    parser.add_argument("--dry-run", action="store_true",
+                        help="run health probes only, write nothing")
+    args = parser.parse_args()
+
     repo = Path(os.environ.get("GITHUB_REPO_PATH", Path(__file__).resolve().parent))
     out_dir = repo / "catalyst_screen"
     today = date.today()
-    start, end, label = next_quarter_window(today)
+    run_date = today.isoformat()
+    target, label = next_quarter_window(today)
 
-    csv_path = out_dir / f"catalyst_candidates_{today.isoformat()}.csv"
-    log_path = out_dir / f"catalyst_candidates_{today.isoformat()}_log.txt"
-    logger = setup_logging(out_dir / f"catalyst_run_{today.isoformat()}.debug.log")
+    setup_logging(out_dir / f"catalyst_run_{run_date}.debug.log")
+    log.info("=== Catalyst screen v2: target %s (%s .. %s) ===",
+             label, target.start, target.end)
 
-    logger.info("=== Quarterly catalyst screen: target %s (%s .. %s) ===",
-                label, start, end)
+    health = HealthRegistry()
+    notes: list[str] = []
+    session = requests.Session()
 
-    universe, errors = run_finviz_screen(logger)
-    logger.info("Finviz universe: %d unique tickers", len(universe))
+    try:
+        edgar.headers()
+    except edgar.SecUserAgentMissing as exc:
+        log.error("%s", exc)
+        health.record("config:sec_user_agent", status=Status.FAILED,
+                      required=True, detail=str(exc))
+        _finish(out_dir, run_date, label, target, 0, [], health, notes,
+                {}, args.rank_by, aborted=True)
+        sys.exit(1)
 
-    if not universe:
-        msg = ("Finviz screen returned ZERO tickers — refusing to write an empty "
-               "candidate file. Check the screener URL/filters or whether Finviz "
-               "is blocking the runner IP.")
-        logger.error(msg)
-        if os.environ.get("ALLOW_EMPTY", "").lower() != "true":
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(
-                "Quarterly Biotech Catalyst Screener — Stage A FAILED\n"
-                + "=" * 64 + f"\n\n{msg}\n\nErrors:\n"
-                + "\n".join(f"  - {e}" for e in errors) + "\n",
-                encoding="utf-8",
-            )
-            sys.exit(1)
+    if args.dry_run:
+        for name, fn in (("edgar:fts", edgar.probe),
+                         ("clinicaltrials.gov", ctgov.probe)):
+            ok, detail = fn(session)
+            health.record(name, status=Status.OK if ok else Status.FAILED,
+                          required=True, detail=detail)
+        print(health.summary())
+        sys.exit(1 if health.should_abort() else 0)
 
-    survivors, catalyst_errors = screen_catalysts(universe, start, end, logger)
-    errors.extend(catalyst_errors)
+    universe = build_universe(session, health, notes)
+    log.info("Finviz universe: %d tickers", len(universe))
 
-    write_outputs(survivors, len(universe), errors, label, start, end,
-                  csv_path, log_path, logger)
-    logger.info("=== Stage A complete: %d candidates ===", len(survivors))
+    cik_map: dict[str, str] = {}
+    if universe:
+        try:
+            cik_map = edgar.load_cik_map(session)
+            log.info("Loaded SEC ticker->CIK map (%d entries)", len(cik_map))
+        except Exception as exc:
+            log.error("SEC ticker map failed: %s", exc)
+        universe = validate_tickers(universe, cik_map, health, notes)
+        enrich_short_interest(
+            universe, health, notes,
+            use_fallback=os.environ.get("SKIP_SHORT_FALLBACK", "").lower() != "true")
+
+    if health.should_abort():
+        log.error("Aborting before catalyst stage:\n%s", health.summary())
+        _finish(out_dir, run_date, label, target, len(universe), [], health,
+                notes, {}, args.rank_by, aborted=True)
+        sys.exit(0 if os.environ.get("ALLOW_DEGRADED", "").lower() == "true" else 1)
+
+    sets = collect_catalysts(session, universe, target, health, notes)
+    ranked = rank_sets(sets.values(), by=args.rank_by)
+    log.info("Survivors: %d", len(ranked))
+
+    rows = build_rows(
+        ranked, universe, session,
+        with_fundamentals=os.environ.get("SKIP_FUNDAMENTALS", "").lower() != "true")
+
+    diff_summary = annotate(rows, find_previous(str(out_dir), run_date))
+
+    aborted = health.should_abort()
+    _finish(out_dir, run_date, label, target, len(universe), rows, health,
+            notes, diff_summary, args.rank_by, aborted=aborted)
+
+    if aborted and os.environ.get("ALLOW_DEGRADED", "").lower() != "true":
+        log.error("Required source(s) failed; exiting non-zero.")
+        sys.exit(1)
+    log.info("=== Stage A complete: %d candidates ===", len(rows))
+
+
+def _finish(out_dir: Path, run_date: str, label: str, target,
+            universe_size: int, rows: list[dict], health: HealthRegistry,
+            notes: list[str], diff_summary: dict, rank_by: str, *,
+            aborted: bool) -> None:
+    status = "FAILED" if aborted else ("DEGRADED" if health.degraded else "OK")
+    if rows:
+        write_csv(rows, out_dir / f"catalyst_candidates_{run_date}.csv")
+    write_summary(
+        out_dir / f"catalyst_candidates_{run_date}_log.txt",
+        run_date=run_date, target_label=label,
+        target_start=target.start.isoformat(), target_end=target.end.isoformat(),
+        universe=universe_size, rows=rows, health_summary=health.summary(),
+        status=status, diff_summary=diff_summary, rank_by=rank_by, notes=notes)
+    write_manifest(
+        out_dir / f"catalyst_manifest_{run_date}.json",
+        run_date=run_date, target_label=label,
+        target_start=target.start.isoformat(), target_end=target.end.isoformat(),
+        universe=universe_size, survivors=len(rows),
+        researched=sum(1 for r in rows if r.get("research_tier") == "FULL"),
+        status=status, health=health.all, diff_summary=diff_summary,
+        rank_by=rank_by)
+    log.info("Run status: %s", status)
 
 
 if __name__ == "__main__":

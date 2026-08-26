@@ -1,8 +1,16 @@
+# Shared
 requests==2.32.3
 beautifulsoup4==4.12.3
 lxml==5.2.2
-selenium==4.21.0
-yfinance==0.2.54
-pandas==2.2.2
 pytz==2024.1
+
+# fda_scanner.py only
+selenium==4.21.0
+pandas==2.2.2
 gitpython==3.1.43
+
+# Short-interest cross-check / fallback (catalyst screener + fda_scanner)
+yfinance==0.2.54
+
+# Test suite
+pytest==8.2.2
