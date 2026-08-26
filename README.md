@@ -386,10 +386,10 @@ scheduled run, and after any upstream site change.
 
 | Source | What the probe proves |
 |---|---|
-| `finviz` | Industry tokens are valid, the results table parses, tickers are clean symbols, and the short-float column exists under one of its aliases |
-| `edgar:fts` | "PDUFA" across all 8-Ks in 150 days returns hits — zero means the integration is broken, not that nobody mentioned it |
+| `finviz` | Industry tokens are valid, the results table parses, tickers are clean symbols, and the short-float column exists under one of its aliases. On a ticker mismatch it dumps the row markup and every href it saw, so a link-format change is fixed from evidence |
+| `edgar:fts` | "PDUFA" across all 8-Ks in 150 days returns hits, **and** the same query filtered to a CIK from those results still returns hits — the per-CIK path is what the screener actually uses, and is where v1 silently returned nothing |
 | `clinicaltrials.gov` | A query that must return studies does |
-| `pdufa.bio` | The calendar fetches and parses to some rows |
+| `pdufa.bio` | The calendar parses to at least 5 tickers — "more than zero" is too weak a contract, and graded a 1-row parse failure as healthy |
 
 It writes `catalyst_probe_<date>.txt` and a manifest with status
 `DRY_RUN_OK` / `DRY_RUN_FAILED`, and exits non-zero if a required source

@@ -83,20 +83,61 @@ log = logging.getLogger(__name__)
 # Parsing
 # --------------------------------------------------------------------------
 
-def _ticker_from_row(row) -> Optional[str]:
-    """Pull the ticker from the quote link rather than the cell text.
+_SYMBOL_RE = re.compile(r"[A-Z][A-Z0-9.\-]{0,9}")
 
-    Cell text is unreliable: v1 read 'BBHVN' for BHVN because the cell wraps
-    the symbol in a nested element and get_text() concatenated both.
+
+def _valid(sym: Optional[str]) -> Optional[str]:
+    sym = (sym or "").strip().upper()
+    return sym if _SYMBOL_RE.fullmatch(sym) else None
+
+
+def _ticker_from_row(row, ticker_cell=None) -> Optional[str]:
+    """Extract the ticker without trusting the cell's concatenated text.
+
+    Cell text is unreliable: the cell wraps the symbol alongside another
+    element (a badge or logo), so get_text() returns 'AABEO' for ABEO.
+    Four strategies, most specific first:
+
+      1. quote.ashx?t=SYM   -- the classic Finviz link
+      2. /quote/SYM         -- path-style link
+      3. the ANCHOR's own text, not the cell's. This is the robust one: it
+         works whatever the href looks like, because the badge sits outside
+         the <a> while the symbol sits inside it.
+      4. a data-ticker / data-symbol attribute
+
+    Returning None falls through to the raw cell text, which is then
+    validated against the SEC ticker map rather than "repaired".
     """
-    for a in row.find_all("a", href=True):
+    anchors = row.find_all("a", href=True)
+
+    for a in anchors:
         href = a["href"]
-        if "quote.ashx" not in href:
-            continue
-        qs = parse_qs(urlparse(href).query)
-        sym = (qs.get("t") or [""])[0].strip().upper()
-        if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", sym):
+        if "quote.ashx" in href:
+            sym = _valid((parse_qs(urlparse(href).query).get("t") or [""])[0])
+            if sym:
+                return sym
+
+    for a in anchors:
+        parts = [p for p in urlparse(a["href"]).path.split("/") if p]
+        if "quote" in parts:
+            i = parts.index("quote")
+            if i + 1 < len(parts):
+                sym = _valid(parts[i + 1])
+                if sym:
+                    return sym
+
+    # Anchor text inside the ticker cell, ignoring sibling badge elements.
+    scope = ticker_cell if ticker_cell is not None else row
+    for a in scope.find_all("a"):
+        sym = _valid(a.get_text(strip=True))
+        if sym:
             return sym
+
+    for node in (scope, row):
+        for attr in ("data-ticker", "data-symbol", "data-boxover"):
+            sym = _valid(node.get(attr) if hasattr(node, "get") else None)
+            if sym:
+                return sym
     return None
 
 
@@ -118,15 +159,16 @@ def parse_screener_table(html: str) -> list[dict]:
             cells = row.find_all("td")
             if len(cells) != len(header):
                 continue
-            ticker = _ticker_from_row(row)
+            idx_t = header.index("Ticker")
+            ticker = _ticker_from_row(
+                row, cells[idx_t] if idx_t < len(cells) else None)
             if not ticker:
                 # No quote link. Take the cell text verbatim -- never try to
                 # "repair" it by de-duplicating characters, which would corrupt
                 # legitimate tickers (AAPL -> APL, AA -> A). Suspicious symbols
                 # are caught downstream by validation against the SEC ticker
                 # map, which is authoritative.
-                idx = header.index("Ticker")
-                ticker = cells[idx].get_text(strip=True).upper()
+                ticker = cells[idx_t].get_text(strip=True).upper()
             if not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", ticker or ""):
                 continue
             rec = {name: cells[i].get_text(strip=True)
@@ -257,7 +299,39 @@ def probe(session: requests.Session) -> tuple[bool, str, dict]:
         doubled = [t for t in sample if len(t) > 2 and t[0] == t[1]]
         if len(doubled) == len(sample):
             problems.append(f"every sampled ticker looks doubled: {sample}")
+            # The href-based extractor is not firing. Capture the actual
+            # markup so the next run says exactly why, instead of guessing.
+            metrics["ticker_markup"] = _describe_ticker_cell(html_ov)
     else:
         problems.append("overview view returned no parseable rows")
 
     return (not problems), ("; ".join(problems) or "probe OK"), metrics
+
+
+def _describe_ticker_cell(html: str) -> str:
+    """Diagnostic dump of the first result row's ticker cell.
+
+    Reports the raw markup and every href present, so a change in Finviz's
+    link format can be fixed from evidence rather than guessed at.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        header = [c.get_text(strip=True) for c in rows[0].find_all(["td", "th"])]
+        if "Ticker" not in header:
+            continue
+        idx = header.index("Ticker")
+        for row in rows[1:]:
+            cells = row.find_all("td")
+            if len(cells) != len(header):
+                continue
+            cell = cells[idx]
+            hrefs = [a.get("href", "") for a in row.find_all("a", href=True)]
+            return (
+                f"cell_html={str(cell)[:400]!r} "
+                f"cell_text={cell.get_text(strip=True)!r} "
+                f"row_hrefs={hrefs[:6]}"
+            )
+    return "no result row found to describe"

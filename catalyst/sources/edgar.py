@@ -141,14 +141,36 @@ def probe(session: requests.Session) -> tuple[bool, str]:
     changed -- not that nobody mentioned PDUFA.
     """
     today = date.today()
-    hits = search(session, "PDUFA", start=today - timedelta(days=LOOKBACK_DAYS),
-                  end=today, forms="8-K")
-    if hits:
-        return True, f"probe returned {len(hits)} hits"
-    return False, ("probe for 'PDUFA' across all 8-K filings in the last "
-                   f"{LOOKBACK_DAYS} days returned ZERO hits -- EDGAR full-text "
-                   "search integration is broken (endpoint, params or response "
-                   "shape), not merely quiet")
+    start = today - timedelta(days=LOOKBACK_DAYS)
+    hits = search(session, "PDUFA", start=start, end=today, forms="8-K")
+    if not hits:
+        return False, ("probe for 'PDUFA' across all 8-K filings in the last "
+                       f"{LOOKBACK_DAYS} days returned ZERO hits -- EDGAR "
+                       "full-text search integration is broken (endpoint, "
+                       "params or response shape), not merely quiet")
+
+    # The bare query working does not prove the production path works. v1
+    # returned zero across 1,278 per-CIK requests with no errors, so probe
+    # the shape actually used: same phrase, filtered to a CIK we just saw
+    # return a hit. Zero there means the `ciks` filter is the broken part.
+    cik = ""
+    for hit in hits:
+        ciks = (hit.get("_source", {}) or {}).get("ciks") or []
+        if ciks:
+            cik = str(ciks[0]).zfill(10)
+            break
+    if not cik:
+        return True, (f"probe returned {len(hits)} hits, but no CIK was present "
+                      "in the response so the per-CIK path is unverified")
+
+    scoped = search(session, "PDUFA", cik=cik, start=start, end=today, forms="8-K")
+    if not scoped:
+        return False, (f"bare query returned {len(hits)} hits, but the same "
+                       f"query filtered to CIK {cik} -- which appears in those "
+                       "very results -- returned ZERO. The `ciks` filter is "
+                       "broken, which is the path the screener actually uses.")
+    return True, (f"probe returned {len(hits)} hits; per-CIK path verified "
+                  f"against CIK {cik} ({len(scoped)} hits)")
 
 
 def _document_url(hit: dict) -> Optional[str]:

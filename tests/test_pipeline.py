@@ -199,3 +199,19 @@ def test_dry_run_reports_each_broken_source(tmp_path):
 def test_dry_run_writes_no_candidates_file(tmp_path):
     _, _, out_dir = run_dry(tmp_path, STUB_PROBES_PASS)
     assert not list(out_dir.glob("catalyst_candidates_*.csv"))
+
+
+def test_pdufa_probe_rejects_implausibly_small_calendar(monkeypatch):
+    """REGRESSION: the first dry run graded a 1-ticker calendar as OK."""
+    import catalyst.sources.pdufa as pd
+
+    monkeypatch.setattr(pd, "fetch", lambda s: ({"AAA": []}, "one row"))
+    ok, detail, metrics = pd.probe(None)
+    assert ok is False
+    assert "expected at least" in detail
+    assert metrics["tickers"] == 1
+
+    many = {f"T{i}": [] for i in range(12)}
+    monkeypatch.setattr(pd, "fetch", lambda s: (many, "ok"))
+    ok, _, metrics = pd.probe(None)
+    assert ok is True and metrics["tickers"] == 12
