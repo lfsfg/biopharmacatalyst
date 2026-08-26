@@ -1,0 +1,246 @@
+Quarterly Biotech Catalyst Screener — Stage A summary
+================================================================
+Run timestamp (ET):     2026-08-26 08:02:38 EDT
+Target catalyst window: Q4 2026  (2026-10-01 .. 2026-12-31)
+
+Finviz universe size:        213
+Survived catalyst check:     18
+  full research (top 20):    18
+  flagged-but-unresearched:  0
+
+Candidates (rank. ticker  date  sources):
+    1. BBHVN  2026-10      CT.gov
+    2. EEYPT  2026-10      CT.gov
+    3. MMIRM  2026-10      CT.gov
+    4. RRGNX  2026-10      CT.gov
+    5. AANNX  2026-10-31   CT.gov
+    6. OOLMA  2026-10-31   CT.gov
+    7. SSRPT  2026-10-31   CT.gov
+    8. TTGTX  2026-10-31   CT.gov
+    9. CCGON  2026-11      CT.gov
+   10. AAVIR  2026-12      CT.gov
+   11. DDMAC  2026-12      CT.gov
+   12. GGOSS  2026-12      CT.gov
+   13. IIONS  2026-12      CT.gov
+   14. KKPTI  2026-12      CT.gov
+   15. KKRYS  2026-12      CT.gov
+   16. MMANE  2026-12      CT.gov
+   17. VVIR   2026-12      CT.gov
+   18. BBCRX  2026-12      CT.gov
+
+Errors / warnings (215):
+  - AABEO: short float missing from Finviz ownership view
+  - AABSI: short float missing from Finviz ownership view
+  - AABUS: short float missing from Finviz ownership view
+  - AACHV: short float missing from Finviz ownership view
+  - AACRS: short float missing from Finviz ownership view
+  - AADMA: short float missing from Finviz ownership view
+  - AAGEN: short float missing from Finviz ownership view
+  - AAGIO: short float missing from Finviz ownership view
+  - AAKTS: short float missing from Finviz ownership view
+  - AALLO: short float missing from Finviz ownership view
+  - AALT: short float missing from Finviz ownership view
+  - AANAB: short float missing from Finviz ownership view
+  - AANNX: short float missing from Finviz ownership view
+  - AANVS: short float missing from Finviz ownership view
+  - AARCT: short float missing from Finviz ownership view
+  - AARQT: short float missing from Finviz ownership view
+  - AASMB: short float missing from Finviz ownership view
+  - AATYR: short float missing from Finviz ownership view
+  - AAVBP: short float missing from Finviz ownership view
+  - AAVIR: short float missing from Finviz ownership view
+  - AAVTX: short float missing from Finviz ownership view
+  - AAVXL: short float missing from Finviz ownership view
+  - BBBIO: short float missing from Finviz ownership view
+  - BBCAX: short float missing from Finviz ownership view
+  - BBDTX: short float missing from Finviz ownership view
+  - BBEAM: short float missing from Finviz ownership view
+  - BBHVN: short float missing from Finviz ownership view
+  - BBMEA: short float missing from Finviz ownership view
+  - CCABA: short float missing from Finviz ownership view
+  - CCADL: short float missing from Finviz ownership view
+  - CCAI: short float missing from Finviz ownership view
+  - CCAPR: short float missing from Finviz ownership view
+  - CCBIO: short float missing from Finviz ownership view
+  - CCCCC: short float missing from Finviz ownership view
+  - CCELC: short float missing from Finviz ownership view
+  - CCGEM: short float missing from Finviz ownership view
+  - CCGON: short float missing from Finviz ownership view
+  - CCHRS: short float missing from Finviz ownership view
+  - CCING: short float missing from Finviz ownership view
+  - CCLYM: short float missing from Finviz ownership view
+  - CCMPX: short float missing from Finviz ownership view
+  - CCNTB: short float missing from Finviz ownership view
+  - CCOGT: short float missing from Finviz ownership view
+  - CCORT: short float missing from Finviz ownership view
+  - CCRBP: short float missing from Finviz ownership view
+  - CCRBU: short float missing from Finviz ownership view
+  - CCRDF: short float missing from Finviz ownership view
+  - CCRMD: short float missing from Finviz ownership view
+  - CCRVS: short float missing from Finviz ownership view
+  - CCTMX: short float missing from Finviz ownership view
+  - CCTXR: short float missing from Finviz ownership view
+  - CCYTK: short float missing from Finviz ownership view
+  - DDMAC: short float missing from Finviz ownership view
+  - DDNA: short float missing from Finviz ownership view
+  - DDNLI: short float missing from Finviz ownership view
+  - DDNTH: short float missing from Finviz ownership view
+  - DDRUG: short float missing from Finviz ownership view
+  - DDSGN: short float missing from Finviz ownership view
+  - DDYN: short float missing from Finviz ownership view
+  - EEDIT: short float missing from Finviz ownership view
+  - EELVN: short float missing from Finviz ownership view
+  - EEQ: short float missing from Finviz ownership view
+  - EERAS: short float missing from Finviz ownership view
+  - EEVMN: short float missing from Finviz ownership view
+  - EEWTX: short float missing from Finviz ownership view
+  - EEXEL: short float missing from Finviz ownership view
+  - EEYPT: short float missing from Finviz ownership view
+  - FFBIO: short float missing from Finviz ownership view
+  - FFDMT: short float missing from Finviz ownership view
+  - FFLNA: short float missing from Finviz ownership view
+  - FFTRE: short float missing from Finviz ownership view
+  - GGALT: short float missing from Finviz ownership view
+  - GGERN: short float missing from Finviz ownership view
+  - GGLUE: short float missing from Finviz ownership view
+  - GGOSS: short float missing from Finviz ownership view
+  - GGRCE: short float missing from Finviz ownership view
+  - HHALO: short float missing from Finviz ownership view
+  - HHRTX: short float missing from Finviz ownership view
+  - HHUMA: short float missing from Finviz ownership view
+  - IIBRX: short float missing from Finviz ownership view
+  - IIDYA: short float missing from Finviz ownership view
+  - IIMMX: short float missing from Finviz ownership view
+  - IIMNM: short float missing from Finviz ownership view
+  - IIMRX: short float missing from Finviz ownership view
+  - IIMUX: short float missing from Finviz ownership view
+  - IIMVT: short float missing from Finviz ownership view
+  - IINBX: short float missing from Finviz ownership view
+  - IINO: short float missing from Finviz ownership view
+  - IIONS: short float missing from Finviz ownership view
+  - IIOVA: short float missing from Finviz ownership view
+  - IIPSC: short float missing from Finviz ownership view
+  - IIRD: short float missing from Finviz ownership view
+  - IIRON: short float missing from Finviz ownership view
+  - IIVVD: short float missing from Finviz ownership view
+  - JJANX: short float missing from Finviz ownership view
+  - JJBIO: short float missing from Finviz ownership view
+  - JJSPR: short float missing from Finviz ownership view
+  - KKOD: short float missing from Finviz ownership view
+  - KKPTI: short float missing from Finviz ownership view
+  - KKRRO: short float missing from Finviz ownership view
+  - KKRYS: short float missing from Finviz ownership view
+  - KKURA: short float missing from Finviz ownership view
+  - KKYMR: short float missing from Finviz ownership view
+  - KKYTX: short float missing from Finviz ownership view
+  - LLBRX: short float missing from Finviz ownership view
+  - LLCTX: short float missing from Finviz ownership view
+  - LLENZ: short float missing from Finviz ownership view
+  - LLGND: short float missing from Finviz ownership view
+  - LLRMR: short float missing from Finviz ownership view
+  - LLXEO: short float missing from Finviz ownership view
+  - LLXRX: short float missing from Finviz ownership view
+  - LLYEL: short float missing from Finviz ownership view
+  - MMANE: short float missing from Finviz ownership view
+  - MMAZE: short float missing from Finviz ownership view
+  - MMBX: short float missing from Finviz ownership view
+  - MMGNX: short float missing from Finviz ownership view
+  - MMIRM: short float missing from Finviz ownership view
+  - MMLYS: short float missing from Finviz ownership view
+  - MMPLT: short float missing from Finviz ownership view
+  - MMRNA: short float missing from Finviz ownership view
+  - NNGNE: short float missing from Finviz ownership view
+  - NNKTR: short float missing from Finviz ownership view
+  - NNMRA: short float missing from Finviz ownership view
+  - NNRIX: short float missing from Finviz ownership view
+  - NNRXP: short float missing from Finviz ownership view
+  - NNTLA: short float missing from Finviz ownership view
+  - NNUVB: short float missing from Finviz ownership view
+  - NNVAX: short float missing from Finviz ownership view
+  - OOCGN: short float missing from Finviz ownership view
+  - OOCUL: short float missing from Finviz ownership view
+  - OOLMA: short float missing from Finviz ownership view
+  - OOMER: short float missing from Finviz ownership view
+  - OORIC: short float missing from Finviz ownership view
+  - OORKA: short float missing from Finviz ownership view
+  - OOVID: short float missing from Finviz ownership view
+  - PPBYI: short float missing from Finviz ownership view
+  - PPCVX: short float missing from Finviz ownership view
+  - PPGEN: short float missing from Finviz ownership view
+  - PPHAT: short float missing from Finviz ownership view
+  - PPRAX: short float missing from Finviz ownership view
+  - PPRME: short float missing from Finviz ownership view
+  - PPROK: short float missing from Finviz ownership view
+  - PPTCT: short float missing from Finviz ownership view
+  - PPTGX: short float missing from Finviz ownership view
+  - PPVLA: short float missing from Finviz ownership view
+  - QQTTB: short float missing from Finviz ownership view
+  - RRARE: short float missing from Finviz ownership view
+  - RRCKT: short float missing from Finviz ownership view
+  - RRCUS: short float missing from Finviz ownership view
+  - RREPL: short float missing from Finviz ownership view
+  - RRGNX: short float missing from Finviz ownership view
+  - RRIGL: short float missing from Finviz ownership view
+  - RRLAY: short float missing from Finviz ownership view
+  - RRLMD: short float missing from Finviz ownership view
+  - RRNAC: short float missing from Finviz ownership view
+  - RRXRX: short float missing from Finviz ownership view
+  - RRYTM: short float missing from Finviz ownership view
+  - RRZLT: short float missing from Finviz ownership view
+  - SSANA: short float missing from Finviz ownership view
+  - SSGMT: short float missing from Finviz ownership view
+  - SSION: short float missing from Finviz ownership view
+  - SSLDB: short float missing from Finviz ownership view
+  - SSLS: short float missing from Finviz ownership view
+  - SSMMT: short float missing from Finviz ownership view
+  - SSNDX: short float missing from Finviz ownership view
+  - SSPRY: short float missing from Finviz ownership view
+  - SSRPT: short float missing from Finviz ownership view
+  - SSRRK: short float missing from Finviz ownership view
+  - SSTOK: short float missing from Finviz ownership view
+  - SSTRO: short float missing from Finviz ownership view
+  - SSVRA: short float missing from Finviz ownership view
+  - SSYRE: short float missing from Finviz ownership view
+  - TTARS: short float missing from Finviz ownership view
+  - TTECX: short float missing from Finviz ownership view
+  - TTENX: short float missing from Finviz ownership view
+  - TTGTX: short float missing from Finviz ownership view
+  - TTNGX: short float missing from Finviz ownership view
+  - TTNXP: short float missing from Finviz ownership view
+  - TTRVI: short float missing from Finviz ownership view
+  - TTSHA: short float missing from Finviz ownership view
+  - TTVTX: short float missing from Finviz ownership view
+  - TTYRA: short float missing from Finviz ownership view
+  - UUNCY: short float missing from Finviz ownership view
+  - UUPB: short float missing from Finviz ownership view
+  - UURGN: short float missing from Finviz ownership view
+  - VVERA: short float missing from Finviz ownership view
+  - VVIR: short float missing from Finviz ownership view
+  - VVKTX: short float missing from Finviz ownership view
+  - VVNDA: short float missing from Finviz ownership view
+  - VVOR: short float missing from Finviz ownership view
+  - VVRDN: short float missing from Finviz ownership view
+  - VVSTM: short float missing from Finviz ownership view
+  - WWHWK: short float missing from Finviz ownership view
+  - XXNCR: short float missing from Finviz ownership view
+  - ZZBIO: short float missing from Finviz ownership view
+  - ZZURA: short float missing from Finviz ownership view
+  - ZZVRA: short float missing from Finviz ownership view
+  - Finviz returned no rows for industry 'Drug Manufacturers - General'
+  - AAMLX: short float missing from Finviz ownership view
+  - AAMPH: short float missing from Finviz ownership view
+  - AANIP: short float missing from Finviz ownership view
+  - AAQST: short float missing from Finviz ownership view
+  - BBCRX: short float missing from Finviz ownership view
+  - CCOLL: short float missing from Finviz ownership view
+  - DDERM: short float missing from Finviz ownership view
+  - EEBS: short float missing from Finviz ownership view
+  - EEOLS: short float missing from Finviz ownership view
+  - HHIMS: short float missing from Finviz ownership view
+  - HHROW: short float missing from Finviz ownership view
+  - IIRWD: short float missing from Finviz ownership view
+  - LLQDA: short float missing from Finviz ownership view
+  - OORGO: short float missing from Finviz ownership view
+  - PPCRX: short float missing from Finviz ownership view
+  - TTKNO: short float missing from Finviz ownership view
+  - pdufa.bio returned no parseable rows (layout may have changed)
