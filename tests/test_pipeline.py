@@ -125,3 +125,77 @@ def test_allow_degraded_overrides_exit_code(tmp_path):
         tmp_path, STUB_NO_SHORT_FLOAT, env_extra={"ALLOW_DEGRADED": "true"})
     assert proc.returncode == 0
     assert manifest["status"] == "FAILED", "status stays honest even when tolerated"
+
+
+# A dry run where every source probe fails.
+STUB_PROBES_FAIL = """
+    import catalyst.sources.finviz as fv
+    import catalyst.sources.edgar as ed
+    import catalyst.sources.ctgov as ct
+    import catalyst.sources.pdufa as pd
+
+    fv.probe = lambda session: (False, "screener returned no rows", {"overview_rows": 0})
+    pd.probe = lambda session: (False, "parsed 0 rows", {"tickers": 0})
+    ed.probe = lambda session: (False, "PDUFA probe returned ZERO hits")
+    ct.probe = lambda session: (False, "probe returned zero results")
+"""
+
+STUB_PROBES_PASS = """
+    import catalyst.sources.finviz as fv
+    import catalyst.sources.edgar as ed
+    import catalyst.sources.ctgov as ct
+    import catalyst.sources.pdufa as pd
+
+    fv.probe = lambda session: (True, "probe OK",
+                                {"overview_rows": 20, "short_float_rows": "20/20",
+                                 "sample_tickers": "BHVN,EYPT"})
+    pd.probe = lambda session: (True, "ok", {"tickers": 40})
+    ed.probe = lambda session: (True, "probe returned 10 hits")
+    ct.probe = lambda session: (True, "probe OK")
+"""
+
+
+def run_dry(tmp_path: Path, stub: str):
+    sitecustomize = tmp_path / "sitecustomize.py"
+    sitecustomize.write_text(textwrap.dedent(stub), encoding="utf-8")
+    env = dict(os.environ)
+    env.update({
+        "GITHUB_REPO_PATH": str(tmp_path),
+        "PYTHONPATH": f"{tmp_path}{os.pathsep}{REPO}",
+        "SEC_USER_AGENT": "Test Runner test@example.org",
+    })
+    proc = subprocess.run(
+        [sys.executable, str(REPO / "catalyst_screener.py"), "--dry-run"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    out_dir = tmp_path / "catalyst_screen"
+    manifests = sorted(out_dir.glob("catalyst_manifest_*.json"))
+    manifest = json.loads(manifests[-1].read_text()) if manifests else None
+    return proc, manifest, out_dir
+
+
+def test_dry_run_probes_all_four_sources(tmp_path):
+    """The dry run must cover Finviz and pdufa.bio, not just EDGAR/CT.gov."""
+    proc, manifest, out_dir = run_dry(tmp_path, STUB_PROBES_PASS)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    names = {s["name"] for s in manifest["sources"]}
+    assert names == {"finviz", "pdufa.bio", "edgar:fts", "clinicaltrials.gov"}
+    assert manifest["status"] == "DRY_RUN_OK"
+    assert list(out_dir.glob("catalyst_probe_*.txt")), "probe report must be written"
+
+
+def test_dry_run_reports_each_broken_source(tmp_path):
+    proc, manifest, _ = run_dry(tmp_path, STUB_PROBES_FAIL)
+
+    assert proc.returncode == 1
+    assert manifest["status"] == "DRY_RUN_FAILED"
+    by_name = {s["name"]: s for s in manifest["sources"]}
+    assert all(s["status"] == "FAILED" for s in by_name.values())
+    # The detail must name what actually went wrong, not just "failed".
+    assert "ZERO hits" in by_name["edgar:fts"]["detail"]
+    assert "0 rows" in by_name["pdufa.bio"]["detail"]
+
+
+def test_dry_run_writes_no_candidates_file(tmp_path):
+    _, _, out_dir = run_dry(tmp_path, STUB_PROBES_PASS)
+    assert not list(out_dir.glob("catalyst_candidates_*.csv"))

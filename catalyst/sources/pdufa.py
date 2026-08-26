@@ -106,3 +106,9 @@ def fetch(session: requests.Session) -> tuple[dict[str, list[dict]], str]:
             return parsed, f"{url}: {len(parsed)} tickers"
         last = f"{url}: fetched {len(resp.text)} bytes but parsed 0 rows"
     return {}, last
+
+
+def probe(session: requests.Session) -> tuple[bool, str, dict]:
+    """Does the calendar fetch and parse to any rows at all?"""
+    parsed, detail = fetch(session)
+    return bool(parsed), detail, {"tickers": len(parsed)}
