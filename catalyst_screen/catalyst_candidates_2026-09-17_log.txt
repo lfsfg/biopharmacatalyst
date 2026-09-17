@@ -1,0 +1,37 @@
+Quarterly Biotech Catalyst Screener v2 — Stage A summary
+========================================================================
+Run timestamp (ET):     2026-09-17 13:42:05 EDT
+Target catalyst window: Q4 2026  (2026-10-01 .. 2026-12-31)
+Overall status:         DEGRADED
+Ranking:                tier-then-date
+
+Finviz universe size:        20
+Survived catalyst check:     2
+  full research (top 20):    2
+  flagged-but-unresearched:  0
+
+Versus previous run (catalyst_candidates_2026-08-26.csv):
+  carried over:  0
+  new names:     2
+  dropped off:   18
+  dates moved:   0
+
+Candidates (rank. ticker  tier  date  sources):
+    1. D      SOFT  2026-12      CT.gov
+    2. M      SOFT  2026-12      CT.gov
+
+Source health
+----------------------------------------------------------------
+[OK      ] finviz:universe        tickers=24 industries=2
+[DEGRADED] ticker:validation      valid=20 dropped=4  -- only 83% of screener symbols are known to the SEC — the ticker column is probably being parsed incorrectly
+[OK      ] finviz:short_float     present=20 total=20 coverage=100%
+[OK      ] short_float:combined   present=20 total=20 coverage=100%
+[DEGRADED] pdufa.bio              tickers=0  -- parsed 0 rows (https://pdufa.bio/calendar: fetched 84500 bytes but parsed 0 rows) — layout likely changed
+[OK      ] edgar:fts              dated_hits=0  -- probe returned 100 hits; per-CIK path verified against CIK 0001727196 (3 hits)
+[OK      ] clinicaltrials.gov     hits=2  -- probe OK
+[OK      ] pdufa.bio:matched      hits=0
+
+Notes (3):
+  - Industry 'Drug Manufacturers - General' returned 0 rows under the full filters, but token 'ind_drugmanufacturersgeneral' is valid (it returns rows without the short-float filter) — so no company in it has >10% short float. This is a real result, not a bug.
+  - 4 symbol(s) not found in the SEC ticker map and dropped: I, K, N, X
+  - Only 1 of 3 catalyst sources contributed any rows (CT.gov). v1 shipped exactly this state — every survivor came from CT.gov alone — and reported success.

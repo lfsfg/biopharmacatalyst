@@ -1,0 +1,10 @@
+2026-09-17 17:40:51,975 [INFO] catalyst_screener: === Catalyst screen v2: target Q4 2026 (2026-10-01 .. 2026-12-31) ===
+2026-09-17 17:41:08,458 [INFO] catalyst_screener: Finviz Biotechnology                              overview= 24 ownership= 24
+2026-09-17 17:41:09,387 [INFO] catalyst_screener: Finviz Drug Manufacturers - General               overview=  0 ownership=  0
+2026-09-17 17:41:10,672 [INFO] catalyst_screener: Finviz Drug Manufacturers - Specialty & Generic   overview= 11 ownership= 11
+2026-09-17 17:41:10,672 [INFO] catalyst_screener: Finviz universe: 24 tickers
+2026-09-17 17:41:10,744 [INFO] catalyst_screener: Loaded SEC ticker->CIK map (10422 entries)
+2026-09-17 17:41:29,974 [WARNING] catalyst.sources.edgar: EDGAR FTS HTTP 500 (target action date)
+2026-09-17 17:42:04,904 [INFO] catalyst_screener: Survivors: 2
+2026-09-17 17:42:05,574 [INFO] catalyst_screener: Run status: DEGRADED
+2026-09-17 17:42:05,574 [INFO] catalyst_screener: === Stage A complete: 2 candidates ===

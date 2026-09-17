@@ -1,0 +1,103 @@
+{
+  "schema": 2,
+  "run_date": "2026-09-17",
+  "status": "DEGRADED",
+  "target_quarter": {
+    "label": "Q4 2026",
+    "start": "2026-10-01",
+    "end": "2026-12-31"
+  },
+  "counts": {
+    "universe": 20,
+    "survivors": 2,
+    "researched": 2
+  },
+  "rank_by": "tier-then-date",
+  "sources": [
+    {
+      "name": "finviz:universe",
+      "status": "OK",
+      "required": true,
+      "detail": "",
+      "metrics": {
+        "tickers": 24,
+        "industries": 2
+      }
+    },
+    {
+      "name": "ticker:validation",
+      "status": "DEGRADED",
+      "required": true,
+      "detail": "only 83% of screener symbols are known to the SEC \u2014 the ticker column is probably being parsed incorrectly",
+      "metrics": {
+        "valid": 20,
+        "dropped": 4
+      }
+    },
+    {
+      "name": "finviz:short_float",
+      "status": "OK",
+      "required": false,
+      "detail": "",
+      "metrics": {
+        "present": 20,
+        "total": 20,
+        "coverage": "100%"
+      }
+    },
+    {
+      "name": "short_float:combined",
+      "status": "OK",
+      "required": true,
+      "detail": "",
+      "metrics": {
+        "present": 20,
+        "total": 20,
+        "coverage": "100%"
+      }
+    },
+    {
+      "name": "pdufa.bio",
+      "status": "DEGRADED",
+      "required": false,
+      "detail": "parsed 0 rows (https://pdufa.bio/calendar: fetched 84500 bytes but parsed 0 rows) \u2014 layout likely changed",
+      "metrics": {
+        "tickers": 0
+      }
+    },
+    {
+      "name": "edgar:fts",
+      "status": "OK",
+      "required": true,
+      "detail": "probe returned 100 hits; per-CIK path verified against CIK 0001727196 (3 hits)",
+      "metrics": {
+        "dated_hits": 0
+      }
+    },
+    {
+      "name": "clinicaltrials.gov",
+      "status": "OK",
+      "required": true,
+      "detail": "probe OK",
+      "metrics": {
+        "hits": 2
+      }
+    },
+    {
+      "name": "pdufa.bio:matched",
+      "status": "OK",
+      "required": false,
+      "detail": "",
+      "metrics": {
+        "hits": 0
+      }
+    }
+  ],
+  "quarter_over_quarter": {
+    "previous_file": "/home/runner/work/biopharmacatalyst/biopharmacatalyst/catalyst_screen/catalyst_candidates_2026-08-26.csv",
+    "carried_over": 0,
+    "new_names": 2,
+    "dropped": 18,
+    "dates_slipped": 0
+  }
+}
